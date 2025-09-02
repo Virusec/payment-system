@@ -12,13 +12,29 @@ API Gateway: сохраняет итоговый ответ в Redis Idempotency
 
 
 2. Пополнение счёта и переводы между пользователями
+Пополнение:
+Client App - API Gateway: POST /topups (пополнение) + Idempotency-Key
+API Gateway: проверка ключа в Redis Idempotency Store - проксирование
+API Gateway - Payment Orchestrator: создать процесс пополнения.
+Payment Orchestrator (@Transactional): фиксирует topupId + дополнительно записываем доменное событие в таблицу outbox той же БД и в той же транзакции
+Payment Orchestrator - Provider Adapter: POST /psp/payments
+Provider Adapter - PSP: создаёт платёж
+Provider Adapter - Payment Orchestrator: сохранение paymentId, состояние AWAITING_CONFIRMATION + дополнительно записываем доменное событие в таблицу outbox той же БД и в той же транзакции
+PSP - Provider Adapter (webhook): финальный статус SUCCEEDED/FAILED + подпись webhook-запроса
+Provider Adapter: верифицирует подпись - сообщает Оркестратору.
+Payment Orchestrator (логика SAGA):
+- если SUCCEEDED - команда в Accounts & Ledger Service «зачислить пополнение» (requestId=topupId).
+- если FAILED → состояние FAILED (+ в таблицу outbox), уведомление клиенту.
+Accounts & Ledger Service (@Transactional, SERIALIZABLE):
+- дедупликация по requestId;
+- двойные проводки: кредит «кошелёк пользователя», дебет «внешний счёт»;
+- вызов Fee Service (если есть комиссия PSP);
+- outbox TopupCredited, коммит.
+Outbox - Kafka - History Service: события применяются, история обновляется.
+Payment Orchestrator: фиксирует итог (SAGA=COMPLETED) и делает результат доступным через публичное REST-API за Gateway
 
-Пополнение через внешнего провайдера (PSP) — SAGA:
-Client - Gateway: POST /topups (пополнение) + Idempotency-Key.
-Gateway: проверка ключа в Redis - проксирование.
-Gateway - Payment Orchestrator: создать процесс пополнения.
-Orchestrator (@Transactional): фиксирует topupId
-Orchestrator - Provider Adapter: POST /psp/payments
-Adapter - PSP: создаёт платёж
-Adapter - Orchestrator: сохранение paymentId, состояние AWAITING_CONFIRMATION (+ outbox).
+Отказы:
+если Accounts & Ledger Service временно недоступен - настроить повторы операций с управляемой политикой: сколько раз пробовать, какие исключения считать «временными», что делать после исчерпания попыток (Spring Retry);
+если деньги в PSP списались, но Accounts & Ledger Service не зачислил - Payment Orchestrator инициирует refund
 
+Перевод между пользователями:
