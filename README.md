@@ -22,4 +22,3 @@ Orchestrator - Provider Adapter: POST /psp/payments
 Adapter - PSP: создаёт платёж
 Adapter - Orchestrator: сохранение paymentId, состояние AWAITING_CONFIRMATION (+ outbox).
 
-Orchestrator → Gateway → Client: вернуть redirectUrl/инструкцию.
